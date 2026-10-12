@@ -87,14 +87,14 @@ jobs:
       - name: Validate failure localization
         run: python -m json.tool artifacts/experiment-001/failure_localization.json
 
-      - name: Describe localized failure fields
-        run: python scripts/describe_failure_fields_experiment_001.py
-
       - name: Verify failure localization against source
         run: python scripts/verify_failure_localization_experiment_001.py
 
-      - name: Validate failure field descriptions
-        run: python -m json.tool artifacts/experiment-001/failure_field_descriptions.json > /dev/null
+      - name: Describe localized failure fields
+        run: python scripts/describe_failure_fields_experiment_001.py
+
+      - name: Validate failure field descriptions v2
+        run: python -m json.tool artifacts/experiment-001/failure_field_descriptions_v2.json > /dev/null
 
       - name: Validate inspection JSON
         run: python -m json.tool artifacts/experiment-001/inspection.json
