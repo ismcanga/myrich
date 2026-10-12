@@ -96,6 +96,12 @@ jobs:
       - name: Validate failure field descriptions v2
         run: python -m json.tool artifacts/experiment-001/failure_field_descriptions_v2.json > /dev/null
 
+      - name: Build failure overlap inventory
+        run: python scripts/build_failure_overlap_inventory_experiment_001.py
+
+      - name: Validate failure overlap inventory
+        run: python -m json.tool artifacts/experiment-001/failure_overlap_inventory.json > /dev/null
+
       - name: Validate inspection JSON
         run: python -m json.tool artifacts/experiment-001/inspection.json
 
