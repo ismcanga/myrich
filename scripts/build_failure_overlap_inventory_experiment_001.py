@@ -222,9 +222,89 @@ def build_edges(transitions):
     return edges
 
 
+def build_overlap_summary(
+    transitions,
+    edges,
+):
+    summary = {
+        transition[
+            "transition_id"
+        ]: {
+            "direct_overlap_count": 0,
+            "same_focal_cell_overlap_count": 0,
+            "consecutive_focal_overlap_count": 0,
+            "maximum_shared_measurement_count": 0,
+            "directly_overlapping_transition_ids": [],
+        }
+        for transition in transitions
+    }
+
+    for edge in edges:
+        transition_a = edge[
+            "transition_a"
+        ]
+        transition_b = edge[
+            "transition_b"
+        ]
+
+        for current_id, other_id in (
+            (
+                transition_a,
+                transition_b,
+            ),
+            (
+                transition_b,
+                transition_a,
+            ),
+        ):
+            item = summary[current_id]
+
+            item[
+                "direct_overlap_count"
+            ] += 1
+
+            if edge[
+                "same_focal_cell"
+            ]:
+                item[
+                    "same_focal_cell_overlap_count"
+                ] += 1
+
+            if edge[
+                "consecutive_focal_transitions"
+            ]:
+                item[
+                    "consecutive_focal_overlap_count"
+                ] += 1
+
+            item[
+                "maximum_shared_measurement_count"
+            ] = max(
+                item[
+                    "maximum_shared_measurement_count"
+                ],
+                edge[
+                    "shared_measurement_count"
+                ],
+            )
+
+            item[
+                "directly_overlapping_transition_ids"
+            ].append(
+                other_id
+            )
+
+    for item in summary.values():
+        item[
+            "directly_overlapping_transition_ids"
+        ].sort()
+
+    return summary
+
+
 def transition_summary(
     transition,
-    overlap_degree,
+    overlap_summary,
 ):
     return {
         "transition_id": transition[
@@ -250,7 +330,7 @@ def transition_summary(
                 "measurement_refs"
             ]
         ),
-        "overlap_degree": overlap_degree,
+        "overlap": overlap_summary,
     }
 
 
@@ -290,21 +370,12 @@ def main():
         transitions
     )
 
-    degree_by_id = {
-        transition[
-            "transition_id"
-        ]: 0
-        for transition in transitions
-    }
-
-    for edge in edges:
-        degree_by_id[
-            edge["transition_a"]
-        ] += 1
-
-        degree_by_id[
-            edge["transition_b"]
-        ] += 1
+    overlap_summary_by_id = (
+        build_overlap_summary(
+            transitions,
+            edges,
+        )
+    )
 
     output = {
         "schema_version": 1,
@@ -334,7 +405,7 @@ def main():
         "transitions": [
             transition_summary(
                 transition,
-                degree_by_id[
+                overlap_summary_by_id[
                     transition[
                         "transition_id"
                     ]
