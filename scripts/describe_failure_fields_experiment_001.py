@@ -1,22 +1,14 @@
 import json
-from math import sqrt
+from math import cos, radians, sqrt
 from pathlib import Path
 
 
 ROOT = Path("artifacts/experiment-001")
 
-INPUT = ROOT / "failure_localization_site.json"
-OUTPUT = ROOT / "failure_field_descriptions.json"
+INPUT = ROOT / "failure_localization.json"
+OUTPUT = ROOT / "failure_field_descriptions_v2.json"
 
-GRID_SPACING_DEGREES = 0.25
-
-# Approximate metres per degree latitude.
-METRES_PER_DEGREE = 111_320.0
-
-# For this first pass we use one fixed nominal spacing.
-# This is intentionally simple and transparent.
-DX_METRES = GRID_SPACING_DEGREES * METRES_PER_DEGREE
-DY_METRES = GRID_SPACING_DEGREES * METRES_PER_DEGREE
+METRES_PER_DEGREE_LATITUDE = 111_320.0
 
 
 def mean(values):
@@ -44,28 +36,15 @@ def magnitude(u, v):
     return sqrt(u * u + v * v)
 
 
-def flatten_valid(u_grid, v_grid):
-    vectors = []
-
-    for row_index in range(len(u_grid)):
-        for column_index in range(len(u_grid[row_index])):
-            u = u_grid[row_index][column_index]
-            v = v_grid[row_index][column_index]
-
-            if u is None or v is None:
-                continue
-
-            vectors.append((float(u), float(v)))
-
-    return vectors
-
-
 def vector_coherence(vectors):
     """
-    0 means the vectors largely cancel.
-    1 means they point together.
+    Magnitude of the mean vector divided by
+    mean individual vector magnitude.
 
-    This is a geometric descriptor only.
+    Near 1 means the vectors are strongly aligned.
+    Near 0 means they substantially cancel.
+
+    Undefined for an all-zero field.
     """
 
     if not vectors:
@@ -87,54 +66,247 @@ def vector_coherence(vectors):
     )
 
     if mean_individual_speed == 0:
-        return 0.0
-
-    return mean_vector_speed / mean_individual_speed
-
-
-def center_difference(left, right, spacing):
-    if left is None or right is None:
         return None
 
-    return (right - left) / (2.0 * spacing)
+    return (
+        mean_vector_speed
+        / mean_individual_speed
+    )
 
 
-def local_derivatives(u_grid, v_grid):
+def frame_grids(frame):
     """
-    Estimate derivatives at the center cell of a 3x3 field.
+    Reconstruct the localized field without
+    modifying measurement values.
 
-    Grid orientation:
+    Expected interior support is 3x3, but boundary
+    truncation or missing measurements remain visible.
+    """
 
-        row 0 = south
-        row 1 = center latitude
-        row 2 = north
+    cells = frame["cells"]
 
-        col 0 = west
-        col 1 = center longitude
-        col 2 = east
+    latitudes = sorted(
+        {
+            cell["latitude"]
+            for cell in cells
+        }
+    )
+
+    longitudes = sorted(
+        {
+            cell["longitude"]
+            for cell in cells
+        }
+    )
+
+    cell_by_position = {
+        (
+            cell["latitude"],
+            cell["longitude"],
+        ): cell
+        for cell in cells
+    }
+
+    u_grid = []
+    v_grid = []
+    valid_refs = []
+
+    for latitude in latitudes:
+        u_row = []
+        v_row = []
+
+        for longitude in longitudes:
+            cell = cell_by_position.get(
+                (latitude, longitude)
+            )
+
+            if (
+                cell is None
+                or not cell.get(
+                    "valid",
+                    False,
+                )
+            ):
+                u_row.append(None)
+                v_row.append(None)
+                continue
+
+            u_row.append(
+                float(cell["ugos_mps"])
+            )
+            v_row.append(
+                float(cell["vgos_mps"])
+            )
+
+            valid_refs.append(
+                {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                }
+            )
+
+        u_grid.append(u_row)
+        v_grid.append(v_row)
+
+    return {
+        "latitudes": latitudes,
+        "longitudes": longitudes,
+        "u_grid": u_grid,
+        "v_grid": v_grid,
+        "valid_refs": valid_refs,
+        "boundary_truncated": (
+            len(latitudes) != 3
+            or len(longitudes) != 3
+        ),
+    }
+
+
+def flatten_valid(u_grid, v_grid):
+    vectors = []
+
+    for row_index in range(len(u_grid)):
+        for column_index in range(
+            len(u_grid[row_index])
+        ):
+            u = u_grid[
+                row_index
+            ][column_index]
+
+            v = v_grid[
+                row_index
+            ][column_index]
+
+            if u is None or v is None:
+                continue
+
+            vectors.append((u, v))
+
+    return vectors
+
+
+def local_spacing_metres(
+    latitudes,
+    longitudes,
+):
+    """
+    Local Cartesian approximation.
+
+    dy uses latitude separation directly.
+
+    dx scales longitude separation by cos(latitude).
+    """
+
+    if (
+        len(latitudes) != 3
+        or len(longitudes) != 3
+    ):
+        return None, None
+
+    center_latitude = latitudes[1]
+
+    dy_metres = abs(
+        (
+            latitudes[2]
+            - latitudes[0]
+        )
+        / 2.0
+        * METRES_PER_DEGREE_LATITUDE
+    )
+
+    metres_per_degree_longitude = (
+        METRES_PER_DEGREE_LATITUDE
+        * cos(
+            radians(
+                center_latitude
+            )
+        )
+    )
+
+    dx_metres = abs(
+        (
+            longitudes[2]
+            - longitudes[0]
+        )
+        / 2.0
+        * metres_per_degree_longitude
+    )
+
+    return dx_metres, dy_metres
+
+
+def center_difference(
+    left,
+    right,
+    spacing,
+):
+    if (
+        left is None
+        or right is None
+        or not spacing
+    ):
+        return None
+
+    return (
+        right - left
+    ) / (
+        2.0 * spacing
+    )
+
+
+def local_derivatives(
+    u_grid,
+    v_grid,
+    latitudes,
+    longitudes,
+):
+    """
+    Centered finite-difference approximation
+    at the centre of a complete 3x3 field.
 
     divergence:
         du/dx + dv/dy
 
     vertical vorticity:
         dv/dx - du/dy
-
-    These are simple centered finite differences.
     """
 
-    if len(u_grid) != 3 or len(v_grid) != 3:
-        return {
-            "divergence_per_s": None,
-            "vorticity_per_s": None,
-        }
-
-    if any(
-        len(row) != 3
-        for row in u_grid + v_grid
+    if (
+        len(u_grid) != 3
+        or len(v_grid) != 3
     ):
         return {
             "divergence_per_s": None,
             "vorticity_per_s": None,
+            "stencil_complete": False,
+        }
+
+    if any(
+        len(row) != 3
+        for row in (
+            u_grid + v_grid
+        )
+    ):
+        return {
+            "divergence_per_s": None,
+            "vorticity_per_s": None,
+            "stencil_complete": False,
+        }
+
+    dx_metres, dy_metres = (
+        local_spacing_metres(
+            latitudes,
+            longitudes,
+        )
+    )
+
+    if (
+        not dx_metres
+        or not dy_metres
+    ):
+        return {
+            "divergence_per_s": None,
+            "vorticity_per_s": None,
+            "stencil_complete": False,
         }
 
     west_u = u_grid[1][0]
@@ -149,47 +321,72 @@ def local_derivatives(u_grid, v_grid):
     south_u = u_grid[0][1]
     north_u = u_grid[2][1]
 
+    stencil_values = (
+        west_u,
+        east_u,
+        south_v,
+        north_v,
+        west_v,
+        east_v,
+        south_u,
+        north_u,
+    )
+
+    stencil_complete = all(
+        value is not None
+        for value in stencil_values
+    )
+
+    if not stencil_complete:
+        return {
+            "divergence_per_s": None,
+            "vorticity_per_s": None,
+            "stencil_complete": False,
+        }
+
     du_dx = center_difference(
         west_u,
         east_u,
-        DX_METRES,
+        dx_metres,
     )
 
     dv_dy = center_difference(
         south_v,
         north_v,
-        DY_METRES,
+        dy_metres,
     )
 
     dv_dx = center_difference(
         west_v,
         east_v,
-        DX_METRES,
+        dx_metres,
     )
 
     du_dy = center_difference(
         south_u,
         north_u,
-        DY_METRES,
+        dy_metres,
     )
 
-    divergence = None
-    if du_dx is not None and dv_dy is not None:
-        divergence = du_dx + dv_dy
-
-    vorticity = None
-    if dv_dx is not None and du_dy is not None:
-        vorticity = dv_dx - du_dy
-
     return {
-        "divergence_per_s": divergence,
-        "vorticity_per_s": vorticity,
+        "divergence_per_s": (
+            du_dx + dv_dy
+        ),
+        "vorticity_per_s": (
+            dv_dx - du_dy
+        ),
+        "stencil_complete": True,
     }
 
 
-def describe_frame(frame):
-    u_grid = frame["ugos_mps"]
-    v_grid = frame["vgos_mps"]
+def describe_frame(
+    frame,
+    start_timestamp,
+):
+    grids = frame_grids(frame)
+
+    u_grid = grids["u_grid"]
+    v_grid = grids["v_grid"]
 
     vectors = flatten_valid(
         u_grid,
@@ -212,47 +409,118 @@ def describe_frame(frame):
     derivatives = local_derivatives(
         u_grid,
         v_grid,
+        grids["latitudes"],
+        grids["longitudes"],
+    )
+
+    frame_time = (
+        frame["timestamp"]
+    )
+
+    from datetime import datetime
+
+    start_dt = datetime.fromisoformat(
+        start_timestamp.replace(
+            "Z",
+            "+00:00",
+        )
+    )
+
+    frame_dt = datetime.fromisoformat(
+        frame_time.replace(
+            "Z",
+            "+00:00",
+        )
+    )
+
+    offset_seconds = int(
+        (
+            frame_dt - start_dt
+        ).total_seconds()
     )
 
     return {
-        "step": frame["step"],
+        "timestamp": frame_time,
+        "relative_measurement_index": (
+            frame[
+                "relative_measurement_index"
+            ]
+        ),
+        "offset_seconds": offset_seconds,
+        "support": {
+            "available_cell_count": len(
+                frame["cells"]
+            ),
+            "valid_cell_count": len(
+                vectors
+            ),
+            "includes_center": any(
+                cell.get(
+                    "center",
+                    False,
+                )
+                for cell in frame["cells"]
+            ),
+            "boundary_truncated": grids[
+                "boundary_truncated"
+            ],
+            "derivative_stencil_complete": (
+                derivatives[
+                    "stencil_complete"
+                ]
+            ),
+        },
         "mean_u_mps": mean_u,
         "mean_v_mps": mean_v,
-        "mean_speed_mps": mean(speeds),
-        "speed_spread_mps": population_std(speeds),
-        "vector_coherence": vector_coherence(vectors),
-        "divergence_per_s": derivatives[
-            "divergence_per_s"
-        ],
-        "vorticity_per_s": derivatives[
-            "vorticity_per_s"
-        ],
+        "mean_speed_mps": mean(
+            speeds
+        ),
+        "speed_spread_mps": (
+            population_std(
+                speeds
+            )
+        ),
+        "vector_coherence": (
+            vector_coherence(
+                vectors
+            )
+        ),
+        "divergence_per_s": (
+            derivatives[
+                "divergence_per_s"
+            ]
+        ),
+        "vorticity_per_s": (
+            derivatives[
+                "vorticity_per_s"
+            ]
+        ),
     }
 
 
-def clean_number(value):
-    if value is None:
-        return None
-
-    return round(float(value), 8)
-
-
-def clean_frame(frame):
-    cleaned = {}
-
-    for key, value in frame.items():
-        if isinstance(value, float):
-            cleaned[key] = clean_number(value)
-        else:
-            cleaned[key] = value
-
-    return cleaned
+def transition_id(
+    slice_name,
+    failure,
+):
+    return (
+        f"{slice_name}:"
+        f"{failure['time_index']}:"
+        f"{failure['lat_index']}:"
+        f"{failure['lon_index']}:"
+        f"{failure['start']}:"
+        f"{failure['end']}"
+    )
 
 
-def describe_failure(failure):
+def describe_failure(
+    slice_name,
+    rank,
+    failure,
+):
     frames = [
-        clean_frame(
-            describe_frame(frame)
+        describe_frame(
+            frame,
+            failure["start"],
         )
         for frame in failure[
             "measurement_window"
@@ -260,8 +528,43 @@ def describe_failure(failure):
     ]
 
     return {
-        "slice": failure["slice"],
-        "rank": failure["rank"],
+        "transition_id": transition_id(
+            slice_name,
+            failure,
+        ),
+        "slice": slice_name,
+        "selection_rank": rank,
+        "time_index": (
+            failure["time_index"]
+        ),
+        "lat_index": (
+            failure["lat_index"]
+        ),
+        "lon_index": (
+            failure["lon_index"]
+        ),
+        "start": failure["start"],
+        "end": failure["end"],
+        "roles": {
+            "A": (
+                "focal_initial_state"
+            ),
+            "B": (
+                "evolution_interval"
+            ),
+            "C": (
+                "focal_resulting_state"
+            ),
+            "D": (
+                "surrounding_measured_field"
+            ),
+        },
+        "calculation": (
+            "persistence_v1"
+        ),
+        "physical_mechanism_status": (
+            "unresolved"
+        ),
         "frames": frames,
     }
 
@@ -269,7 +572,8 @@ def describe_failure(failure):
 def main():
     if not INPUT.exists():
         raise SystemExit(
-            f"Missing input artifact: {INPUT}"
+            f"Missing input artifact: "
+            f"{INPUT}"
         )
 
     data = json.loads(
@@ -278,22 +582,75 @@ def main():
         )
     )
 
-    failures = [
-        describe_failure(failure)
-        for failure in data["failures"]
-    ]
+    failures = []
+
+    for (
+        slice_name,
+        slice_data,
+    ) in data["slices"].items():
+
+        for rank, failure in enumerate(
+            slice_data["failures"],
+            start=1,
+        ):
+            failures.append(
+                describe_failure(
+                    slice_name,
+                    rank,
+                    failure,
+                )
+            )
 
     output = {
+        "schema_version": 2,
         "experiment": "001",
-        "source_artifact": INPUT.name,
+        "source_artifact": (
+            INPUT.name
+        ),
         "purpose": (
-            "describe the local measured vector field "
-            "around selected failed calculations"
+            "describe the local measured "
+            "vector field around selected "
+            "failed calculations"
         ),
         "interpretation_rule": (
-            "these descriptors summarize measured field "
-            "behaviour. They do not identify cause or Delta."
+            "these descriptors summarize "
+            "measured field behaviour. "
+            "They do not identify cause "
+            "or Delta."
         ),
+        "four_unit_structure": {
+            "A": (
+                "focal initial state"
+            ),
+            "B": (
+                "evolution over the "
+                "specified interval"
+            ),
+            "C": (
+                "focal resulting state"
+            ),
+            "D": (
+                "surrounding measured "
+                "field and history"
+            ),
+        },
+        "assumptions": {
+            "geometry": (
+                "local Cartesian "
+                "approximation"
+            ),
+            "metres_per_degree_latitude": (
+                METRES_PER_DEGREE_LATITUDE
+            ),
+            "longitude_spacing": (
+                "scaled by cos(center latitude)"
+            ),
+            "derivative_method": (
+                "centered finite difference "
+                "over a complete 3x3 field"
+            ),
+            "rounding": "none",
+        },
         "descriptors": {
             "mean_u_mps": (
                 "mean eastward measured velocity"
@@ -305,33 +662,20 @@ def main():
                 "mean speed across valid cells"
             ),
             "speed_spread_mps": (
-                "population standard deviation of "
-                "cell speeds"
+                "population standard deviation "
+                "of cell speeds"
             ),
             "vector_coherence": (
-                "magnitude of mean vector divided by "
-                "mean vector magnitude; 0 to 1"
+                "magnitude of mean vector divided "
+                "by mean individual vector magnitude"
             ),
             "divergence_per_s": (
-                "centered finite-difference estimate "
+                "local Cartesian centered estimate "
                 "of du/dx + dv/dy"
             ),
             "vorticity_per_s": (
-                "centered finite-difference estimate "
+                "local Cartesian centered estimate "
                 "of dv/dx - du/dy"
-            ),
-        },
-        "assumptions": {
-            "grid_spacing_degrees": (
-                GRID_SPACING_DEGREES
-            ),
-            "metres_per_degree": (
-                METRES_PER_DEGREE
-            ),
-            "dx_metres": DX_METRES,
-            "dy_metres": DY_METRES,
-            "derivative_method": (
-                "centered difference over the 3x3 field"
             ),
         },
         "failures": failures,
@@ -350,9 +694,12 @@ def main():
         json.dumps(
             {
                 "experiment": "001",
+                "schema_version": 2,
                 "source": INPUT.name,
                 "output": OUTPUT.name,
-                "failure_count": len(failures),
+                "failure_count": len(
+                    failures
+                ),
             },
             indent=2,
         )
