@@ -90,6 +90,9 @@ jobs:
       - name: Verify failure localization against source
         run: python scripts/verify_failure_localization_experiment_001.py
 
+      - name: Validate failure localization verification receipt
+        run: python -m json.tool artifacts/experiment-001/failure_localization_verification.json > /dev/null
+
       - name: Describe localized failure fields
         run: python scripts/describe_failure_fields_experiment_001.py
 
@@ -101,6 +104,18 @@ jobs:
 
       - name: Validate failure overlap inventory
         run: python -m json.tool artifacts/experiment-001/failure_overlap_inventory.json > /dev/null
+
+      - name: Build failure overlap groups
+        run: python scripts/build_failure_overlap_groups_experiment_001.py
+
+      - name: Validate failure overlap groups
+        run: python -m json.tool artifacts/experiment-001/failure_overlap_groups.json > /dev/null
+
+      - name: Describe failure overlap groups
+        run: python scripts/describe_failure_overlap_groups_experiment_001.py
+
+      - name: Validate failure overlap group descriptions
+        run: python -m json.tool artifacts/experiment-001/failure_overlap_group_descriptions.json > /dev/null
 
       - name: Validate inspection JSON
         run: python -m json.tool artifacts/experiment-001/inspection.json
