@@ -294,7 +294,18 @@ def build_overlap_summary(
                 other_id
             )
 
-    for item in summary.values():
+    for transition_id, item in summary.items():
+        localized_count = localized_count_by_id[
+            transition_id
+        ]
+
+        item["overlap_fraction_max"] = (
+            item["maximum_shared_measurement_count"]
+            / localized_count
+            if localized_count
+            else None
+        )
+
         item[
             "directly_overlapping_transition_ids"
         ].sort()
