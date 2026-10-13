@@ -239,6 +239,13 @@ def build_overlap_summary(
         for transition in transitions
     }
 
+    localized_count_by_id = {
+        transition["transition_id"]: len(
+            transition["measurement_refs"]
+        )
+        for transition in transitions
+    }
+
     for edge in edges:
         transition_a = edge[
             "transition_a"
