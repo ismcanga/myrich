@@ -1,7 +1,7 @@
 import json
 from math import cos, radians, sqrt
 from pathlib import Path
-
+from datetime import datetime
 
 ROOT = Path("artifacts/experiment-001")
 
@@ -417,8 +417,6 @@ def describe_frame(
         frame["timestamp"]
     )
 
-    from datetime import datetime
-
     start_dt = datetime.fromisoformat(
         start_timestamp.replace(
             "Z",
@@ -454,6 +452,9 @@ def describe_frame(
             "valid_cell_count": len(
                 vectors
             ),
+            "valid_cell_refs": grids[
+                "valid_refs"
+            ],
             "includes_center": any(
                 cell.get(
                     "center",
@@ -602,7 +603,7 @@ def main():
             )
 
     output = {
-        "schema_version": 2,
+        "schema_version": 3,
         "experiment": "001",
         "source_artifact": (
             INPUT.name
@@ -694,7 +695,7 @@ def main():
         json.dumps(
             {
                 "experiment": "001",
-                "schema_version": 2,
+                "schema_version": 3,
                 "source": INPUT.name,
                 "output": OUTPUT.name,
                 "failure_count": len(

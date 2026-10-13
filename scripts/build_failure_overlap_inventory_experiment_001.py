@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import math
 
 ROOT = Path("artifacts/experiment-001")
 
@@ -35,7 +36,7 @@ def measurement_ref(
     )
 
 
-def measurement_refs(
+def window_refs(
     slice_name,
     failure,
 ):
@@ -47,6 +48,47 @@ def measurement_refs(
         timestamp = frame["timestamp"]
 
         for cell in frame["cells"]:
+            refs.add(
+                measurement_ref(
+                    slice_name,
+                    timestamp,
+                    cell,
+                )
+            )
+
+    return refs
+
+def valid_measurement_cell(cell):
+    ugos = cell.get("ugos_mps")
+    vgos = cell.get("vgos_mps")
+
+    return (
+        isinstance(ugos, (int, float))
+        and not isinstance(ugos, bool)
+        and math.isfinite(ugos)
+        and isinstance(vgos, (int, float))
+        and not isinstance(vgos, bool)
+        and math.isfinite(vgos)
+    )
+
+
+def valid_measurement_refs(
+    slice_name,
+    failure,
+):
+    refs = set()
+
+    for frame in failure[
+        "measurement_window"
+    ]["frames"]:
+        timestamp = frame["timestamp"]
+
+        for cell in frame["cells"]:
+            if not valid_measurement_cell(
+                cell
+            ):
+                continue
+
             refs.add(
                 measurement_ref(
                     slice_name,
@@ -92,9 +134,15 @@ def build_transition(
         ],
         "start": failure["start"],
         "end": failure["end"],
-        "measurement_refs": measurement_refs(
+        "window_refs": window_refs(
             slice_name,
             failure,
+        ),
+        "valid_measurement_refs": (
+            valid_measurement_refs(
+                slice_name,
+                failure,
+            )
         ),
         "focal_identity": focal_identity(
             slice_name,
@@ -172,16 +220,25 @@ def build_edges(transitions):
             ):
                 continue
 
-            shared_refs = (
+            shared_window_refs = (
                 transition_a[
-                    "measurement_refs"
+                    "window_refs"
                 ]
                 & transition_b[
-                    "measurement_refs"
+                    "window_refs"
                 ]
             )
 
-            if not shared_refs:
+            shared_valid_refs = (
+                transition_a[
+                    "valid_measurement_refs"
+                ]
+                & transition_b[
+                    "valid_measurement_refs"
+                ]
+            )
+
+            if not shared_window_refs:
                 continue
 
             edges.append(
@@ -196,12 +253,20 @@ def build_edges(transitions):
                             "transition_id"
                         ]
                     ),
-                    "shared_measurement_count": (
-                        len(shared_refs)
+                    "shared_window_cell_count": (
+                        len(shared_window_refs)
                     ),
-                    "shared_timestamps": (
+                    "shared_valid_measurement_count": (
+                        len(shared_valid_refs)
+                    ),
+                    "shared_window_timestamps": (
                         shared_timestamps(
-                            shared_refs
+                            shared_window_refs
+                        )
+                    ),
+                    "shared_valid_measurement_timestamps": (
+                        shared_timestamps(
+                            shared_valid_refs
                         )
                     ),
                     "same_focal_cell": (
@@ -233,15 +298,25 @@ def build_overlap_summary(
             "direct_overlap_count": 0,
             "same_focal_cell_overlap_count": 0,
             "consecutive_focal_overlap_count": 0,
-            "maximum_shared_measurement_count": 0,
+            "maximum_shared_window_cell_count": 0,
+            "maximum_shared_valid_measurement_count": 0,
             "directly_overlapping_transition_ids": [],
         }
         for transition in transitions
     }
 
-    localized_count_by_id = {
+    localized_window_count_by_id = {
         transition["transition_id"]: len(
-            transition["measurement_refs"]
+            transition["window_refs"]
+        )
+        for transition in transitions
+    }
+
+    localized_valid_count_by_id = {
+        transition["transition_id"]: len(
+            transition[
+                "valid_measurement_refs"
+            ]
         )
         for transition in transitions
     }
@@ -285,13 +360,24 @@ def build_overlap_summary(
                 ] += 1
 
             item[
-                "maximum_shared_measurement_count"
+                "maximum_shared_window_cell_count"
             ] = max(
                 item[
-                    "maximum_shared_measurement_count"
+                    "maximum_shared_window_cell_count"
                 ],
                 edge[
-                    "shared_measurement_count"
+                    "shared_window_cell_count"
+                ],
+            )
+
+            item[
+                "maximum_shared_valid_measurement_count"
+            ] = max(
+                item[
+                    "maximum_shared_valid_measurement_count"
+                ],
+                edge[
+                    "shared_valid_measurement_count"
                 ],
             )
 
@@ -302,14 +388,34 @@ def build_overlap_summary(
             )
 
     for transition_id, item in summary.items():
-        localized_count = localized_count_by_id[
-            transition_id
-        ]
+        localized_window_count = (
+            localized_window_count_by_id[
+                transition_id
+            ]
+        )
+        localized_valid_count = (
+            localized_valid_count_by_id[
+                transition_id
+            ]
+        )
 
-        item["overlap_fraction_max"] = (
-            item["maximum_shared_measurement_count"]
-            / localized_count
-            if localized_count
+        item["window_overlap_fraction_max"] = (
+            item[
+                "maximum_shared_window_cell_count"
+            ]
+            / localized_window_count
+            if localized_window_count
+            else None
+        )
+
+        item[
+            "valid_measurement_overlap_fraction_max"
+        ] = (
+            item[
+                "maximum_shared_valid_measurement_count"
+            ]
+            / localized_valid_count
+            if localized_valid_count
             else None
         )
 
@@ -343,9 +449,12 @@ def transition_summary(
         ],
         "start": transition["start"],
         "end": transition["end"],
-        "localized_measurement_count": len(
+        "localized_window_cell_count": len(
+            transition["window_refs"]
+        ),
+        "localized_valid_measurement_count": len(
             transition[
-                "measurement_refs"
+                "valid_measurement_refs"
             ]
         ),
         "overlap": overlap_summary,
@@ -396,23 +505,31 @@ def main():
     )
 
     output = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": "001",
         "source_artifact": INPUT.name,
         "purpose": (
-            "inventory direct overlap "
-            "between selected localized "
-            "failure windows"
+            "inventory shared localized window "
+            "coverage and shared valid measurements "
+            "between selected failure transitions"
         ),
         "interpretation_rule": (
-            "shared measurements establish "
-            "shared evidence only. They do "
-            "not establish a common physical "
-            "cause or one physical episode."
+            "shared window coverage establishes "
+            "geometric-temporal overlap only. "
+            "Shared valid measurements establish "
+            "shared measured evidence. Missing or "
+            "invalid cells never count as measured "
+            "overlap. Neither establishes a common "
+            "physical cause or one physical episode."
         ),
-        "measurement_identity": (
+        "window_cell_identity": (
             "slice + timestamp + latitude "
             "+ longitude"
+        ),
+        "valid_measurement_identity": (
+            "slice + timestamp + latitude "
+            "+ longitude, requiring finite ugos_mps "
+            "and vgos_mps"
         ),
         "transition_count": len(
             transitions

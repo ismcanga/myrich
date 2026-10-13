@@ -1,12 +1,35 @@
 import json
+import hashlib
 from collections import defaultdict, deque
 from pathlib import Path
-
 
 ROOT = Path("artifacts/experiment-001")
 
 INPUT = ROOT / "failure_overlap_inventory.json"
 OUTPUT = ROOT / "failure_overlap_groups.json"
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def membership_fingerprint(
+    slice_name,
+    component_ids,
+):
+    canonical_membership = {
+        "slice": slice_name,
+        "transition_ids": sorted(
+            component_ids
+        ),
+    }
+
+    encoded = json.dumps(
+        canonical_membership,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return sha256_bytes(encoded)
 
 
 def build_transition_lookup(data):
@@ -170,21 +193,46 @@ def summarize_group(
         for transition in transitions
     )
 
+    transition_count = len(
+        transitions
+    )
+
+    possible_edge_count = (
+        transition_count
+        * (transition_count - 1)
+        // 2
+    )
+
+    edge_count = (
+        edge_count_for_component(
+            component_ids,
+            edges,
+        )
+    )
+
+    edge_density = (
+        edge_count
+        / possible_edge_count
+        if possible_edge_count
+        else 0.0
+    )
+
     return {
         "group_id": group_id(
             slice_name,
             group_number,
         ),
-        "slice": slice_name,
-        "transition_count": len(
-            transitions
-        ),
-        "edge_count": (
-            edge_count_for_component(
+        "membership_fingerprint": (
+            membership_fingerprint(
+                slice_name,
                 component_ids,
-                edges,
             )
         ),
+        "slice": slice_name,
+        "transition_count": transition_count,
+        "edge_count": edge_count,
+        "possible_edge_count": possible_edge_count,
+        "edge_density": edge_density,
         "selection_ranks": (
             selection_ranks
         ),
@@ -295,10 +343,14 @@ def main():
             f"{INPUT}"
         )
 
+    input_bytes = INPUT.read_bytes()
+
     data = json.loads(
-        INPUT.read_text(
-            encoding="utf-8"
-        )
+        input_bytes.decode("utf-8")
+    )
+
+    source_sha256 = sha256_bytes(
+        input_bytes
     )
 
     transitions = data[
@@ -327,11 +379,18 @@ def main():
         )
 
     output = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment": "001",
         "source_artifact": (
             INPUT.name
         ),
+        "provenance": {
+            "source_artifact": INPUT.name,
+            "source_schema_version": data.get(
+                "schema_version"
+            ),
+            "source_sha256": source_sha256,
+        },
         "purpose": (
             "organize selected transitions "
             "into connected overlap groups "
@@ -340,15 +399,17 @@ def main():
         "interpretation_rule": (
             "an overlap group is a connected "
             "component of transitions sharing "
-            "localized measurements. It does "
-            "not establish one physical event, "
-            "episode, mechanism, or Delta."
+            "localized window coverage. Shared "
+            "window coverage is geometric-temporal "
+            "overlap only and does not establish "
+            "shared valid measurements, one physical "
+            "event, episode, mechanism, or Delta."
         ),
         "grouping_rule": (
             "nodes are selected transitions; "
-            "edges are direct shared-measurement "
-            "overlaps; connected components form "
-            "overlap groups"
+            "edges are direct shared-window-coverage "
+            "overlaps from the inventory; connected "
+            "components form overlap groups"
         ),
         "transition_count": len(
             transitions

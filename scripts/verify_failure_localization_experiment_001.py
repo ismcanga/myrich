@@ -10,6 +10,9 @@ ROOT = Path("artifacts/experiment-001")
 
 LOCALIZATION = ROOT / "failure_localization.json"
 CHECKSUMS = ROOT / "SHA256SUMS.txt"
+RECEIPT = ROOT / (
+    "failure_localization_verification.json"
+)
 
 FILES = {
     "west": ROOT / "noaa_np_west_2025-01.nc",
@@ -63,6 +66,7 @@ def verify_checksums():
     expected = load_expected_checksums()
 
     verified = 0
+    verified_files = {}
 
     for path in FILES.values():
         if not path.exists():
@@ -90,9 +94,18 @@ def verify_checksums():
                 f"got {actual_hash}"
             )
 
+        verified_files[path.name] = {
+            "expected_sha256": (
+                expected_hash
+            ),
+            "actual_sha256": (
+                actual_hash
+            ),
+        }
+
         verified += 1
 
-    return verified
+    return verified, verified_files
 
 
 def load_times(ds):
@@ -491,6 +504,23 @@ def verify_slice(
         ),
     }
 
+def write_json_atomic(path, payload):
+    temporary = path.with_name(
+        path.name + ".tmp"
+    )
+
+    temporary.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    temporary.replace(path)
+
 
 def main():
     if not LOCALIZATION.exists():
@@ -499,14 +529,26 @@ def main():
             f"{LOCALIZATION}"
         )
 
-    checksum_count = (
+    checksum_count, verified_files = (
         verify_checksums()
     )
 
+    localization_bytes = (
+        LOCALIZATION.read_bytes()
+    )
+
     localization = json.loads(
-        LOCALIZATION.read_text(
-            encoding="utf-8"
+        localization_bytes.decode(
+            "utf-8"
         )
+    )
+
+    localization_sha256 = hashlib.sha256(
+        localization_bytes
+    ).hexdigest()
+
+    checksums_sha256 = sha256_file(
+        CHECKSUMS
     )
 
     totals = {
@@ -534,19 +576,33 @@ def main():
             totals[key] += result[key]
 
     summary = {
+        "schema_version": 1,
         "experiment": "001",
+        "verification_target": (
+            LOCALIZATION.name
+        ),
+        "provenance": {
+            "localization_sha256": (
+                localization_sha256
+            ),
+            "checksum_manifest": (
+                CHECKSUMS.name
+            ),
+            "checksum_manifest_sha256": (
+                checksums_sha256
+            ),
+            "verified_source_files": (
+                verified_files
+            ),
+        },
         "source_checksums_verified": (
             checksum_count
         ),
         "localized_frames_checked": (
-            totals[
-                "frames_checked"
-            ]
+            totals["frames_checked"]
         ),
         "localized_cells_checked": (
-            totals[
-                "cells_checked"
-            ]
+            totals["cells_checked"]
         ),
         "coordinate_mismatches": (
             totals[
@@ -554,17 +610,18 @@ def main():
             ]
         ),
         "time_mismatches": (
-            totals[
-                "time_mismatches"
-            ]
+            totals["time_mismatches"]
         ),
         "value_mismatches": (
-            totals[
-                "value_mismatches"
-            ]
+            totals["value_mismatches"]
         ),
         "status": "verified",
     }
+
+    write_json_atomic(
+        RECEIPT,
+        summary,
+    )
 
     print(
         json.dumps(
