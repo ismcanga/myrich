@@ -59,6 +59,9 @@ def window_refs(
     return refs
 
 def valid_measurement_cell(cell):
+    if cell.get("valid") is not True:
+        return False
+
     ugos = cell.get("ugos_mps")
     vgos = cell.get("vgos_mps")
 
@@ -528,7 +531,8 @@ def main():
         ),
         "valid_measurement_identity": (
             "slice + timestamp + latitude "
-            "+ longitude, requiring finite ugos_mps "
+            "+ longitude, requiring valid=true and "
+            "finite numeric non-boolean ugos_mps "
             "and vgos_mps"
         ),
         "transition_count": len(

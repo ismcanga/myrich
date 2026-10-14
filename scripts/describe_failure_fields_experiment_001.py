@@ -1,5 +1,5 @@
 import json
-from math import cos, radians, sqrt
+from math import cos, isfinite, radians, sqrt
 from pathlib import Path
 from datetime import datetime
 
@@ -9,6 +9,24 @@ INPUT = ROOT / "failure_localization.json"
 OUTPUT = ROOT / "failure_field_descriptions_v2.json"
 
 METRES_PER_DEGREE_LATITUDE = 111_320.0
+
+
+def valid_measurement_cell(cell):
+    if cell.get("valid") is not True:
+        return False
+
+    u = cell.get("ugos_mps")
+    v = cell.get("vgos_mps")
+
+    for value in (u, v):
+        if isinstance(value, bool):
+            return False
+        if not isinstance(value, (int, float)):
+            return False
+        if not isfinite(value):
+            return False
+
+    return True
 
 
 def mean(values):
@@ -122,9 +140,8 @@ def frame_grids(frame):
 
             if (
                 cell is None
-                or not cell.get(
-                    "valid",
-                    False,
+                or not valid_measurement_cell(
+                    cell
                 )
             ):
                 u_row.append(None)

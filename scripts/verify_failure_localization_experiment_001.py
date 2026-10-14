@@ -136,6 +136,19 @@ def verify_number(
     label,
     tolerance=0.0,
 ):
+    if (
+        isinstance(actual, bool)
+        or not isinstance(
+            actual,
+            (int, float),
+        )
+        or not np.isfinite(actual)
+    ):
+        raise AssertionError(
+            f"{label}: invalid numeric "
+            f"value {actual!r}"
+        )
+
     if tolerance == 0.0:
         if actual != expected:
             raise AssertionError(
@@ -156,6 +169,38 @@ def verify_number(
             f"{expected!r}, got "
             f"{actual!r}"
         )
+
+
+def expected_frame_index(
+    time_index,
+    relative_index,
+    time_count,
+):
+    if (
+        not isinstance(relative_index, int)
+        or isinstance(relative_index, bool)
+    ):
+        raise AssertionError(
+            "invalid relative measurement "
+            f"index: {relative_index!r}"
+        )
+
+    frame_index = (
+        time_index
+        + relative_index
+    )
+
+    if (
+        frame_index < 0
+        or frame_index >= time_count
+    ):
+        raise AssertionError(
+            "relative measurement index "
+            f"out of source range: "
+            f"{relative_index}"
+        )
+
+    return frame_index
 
 
 def verify_slice(
@@ -196,6 +241,19 @@ def verify_slice(
             time_index = failure[
                 "time_index"
             ]
+
+            if (
+                not isinstance(time_index, int)
+                or isinstance(time_index, bool)
+                or time_index < 0
+                or time_index + 1 >= len(times)
+            ):
+                time_mismatches += 1
+                raise AssertionError(
+                    f"{slice_name} invalid "
+                    f"time_index: {time_index!r}"
+                )
+
             lat_index = failure[
                 "lat_index"
             ]
@@ -230,6 +288,21 @@ def verify_slice(
                     f"{slice_name} failure "
                     f"end mismatch at "
                     f"time_index={time_index}"
+                )
+
+            interval_seconds = (
+                times[time_index + 1]
+                - times[time_index]
+            ).total_seconds()
+
+            if interval_seconds != 24 * 60 * 60:
+                time_mismatches += 1
+                raise AssertionError(
+                    f"{slice_name} failure "
+                    f"comparison interval is "
+                    f"not exactly 24 hours at "
+                    f"time_index={time_index}: "
+                    f"{interval_seconds} seconds"
                 )
 
             try:
@@ -342,9 +415,81 @@ def verify_slice(
                 value_mismatches += 1
                 raise
 
+            comparison_frames = {}
+
             for frame in failure[
                 "measurement_window"
             ]["frames"]:
+                relative_index = frame.get(
+                    "relative_measurement_index"
+                )
+
+                if relative_index in (0, 1):
+                    if (
+                        relative_index
+                        in comparison_frames
+                    ):
+                        time_mismatches += 1
+                        raise AssertionError(
+                            f"{slice_name} duplicate "
+                            f"comparison frame: "
+                            f"relative_index="
+                            f"{relative_index}"
+                        )
+
+                    comparison_frames[
+                        relative_index
+                    ] = frame
+
+            if set(comparison_frames) != {0, 1}:
+                time_mismatches += 1
+                raise AssertionError(
+                    f"{slice_name} missing "
+                    f"unique comparison frames "
+                    f"for relative indices 0 and 1"
+                )
+
+            if (
+                comparison_frames[0]["timestamp"]
+                != expected_start
+            ):
+                time_mismatches += 1
+                raise AssertionError(
+                    f"{slice_name} comparison "
+                    f"frame 0 does not match "
+                    f"failure start"
+                )
+
+            if (
+                comparison_frames[1]["timestamp"]
+                != expected_end
+            ):
+                time_mismatches += 1
+                raise AssertionError(
+                    f"{slice_name} comparison "
+                    f"frame 1 does not match "
+                    f"failure end"
+                )
+
+            for frame in failure[
+                "measurement_window"
+            ]["frames"]:
+                relative_index = frame[
+                    "relative_measurement_index"
+                ]
+
+                try:
+                    source_frame_index = (
+                        expected_frame_index(
+                            time_index,
+                            relative_index,
+                            len(times),
+                        )
+                    )
+                except AssertionError:
+                    time_mismatches += 1
+                    raise
+
                 frames_checked += 1
 
                 timestamp = frame[
@@ -372,6 +517,20 @@ def verify_slice(
                 frame_time_index = (
                     matching_indices[0]
                 )
+
+                if (
+                    frame_time_index
+                    != source_frame_index
+                ):
+                    time_mismatches += 1
+                    raise AssertionError(
+                        f"{slice_name} frame "
+                        f"relative measurement "
+                        f"index mismatch: "
+                        f"relative_index="
+                        f"{relative_index}, "
+                        f"timestamp={timestamp}"
+                    )
 
                 for cell in frame[
                     "cells"
@@ -437,6 +596,20 @@ def verify_slice(
                     artifact_valid = cell[
                         "valid"
                     ]
+
+                    if not isinstance(
+                        artifact_valid,
+                        bool,
+                    ):
+                        value_mismatches += 1
+                        raise AssertionError(
+                            f"{slice_name} cell "
+                            f"valid flag is not boolean at "
+                            f"{timestamp} "
+                            f"{latitude}, "
+                            f"{longitude}: "
+                            f"{artifact_valid!r}"
+                        )
 
                     if (
                         source_valid
@@ -528,6 +701,10 @@ def main():
             f"Missing localization artifact: "
             f"{LOCALIZATION}"
         )
+    
+    RECEIPT.unlink(
+        missing_ok=True
+    )
 
     checksum_count, verified_files = (
         verify_checksums()

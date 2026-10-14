@@ -1,5 +1,6 @@
 import json
 import os
+import math
 from pathlib import Path
 
 
@@ -9,6 +10,13 @@ GROUPS_INPUT = ROOT / "failure_overlap_groups.json"
 DESCRIPTORS_INPUT = ROOT / "failure_field_descriptions_v2.json"
 
 OUTPUT = ROOT / "failure_overlap_group_descriptions.json"
+
+def finite_number(value):
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 def frame_by_index(transition, relative_index):
@@ -21,9 +29,51 @@ def frame_by_index(transition, relative_index):
 
     return None
 
+def canonical_support_refs(refs):
+    canonical = []
+
+    for ref in refs:
+        if not isinstance(ref, dict):
+            raise AssertionError(
+                "valid_cell_refs must contain "
+                "coordinate objects"
+            )
+
+        latitude = ref.get("latitude")
+        longitude = ref.get("longitude")
+
+        if (
+            not finite_number(latitude)
+            or not finite_number(longitude)
+        ):
+            raise AssertionError(
+                "valid_cell_refs must contain "
+                "finite numeric latitude and "
+                "longitude"
+            )
+
+        canonical.append(
+            (
+                float(latitude),
+                float(longitude),
+            )
+        )
+
+    if len(canonical) != len(
+        set(canonical)
+    ):
+        raise AssertionError(
+            "valid_cell_refs contains "
+            "duplicate references"
+        )
+
+    return tuple(
+        sorted(canonical)
+    )
+
 
 def sign(value):
-    if value is None:
+    if not finite_number(value):
         return None
 
     if value > 0:
@@ -92,8 +142,8 @@ def difference(
     value_after,
 ):
     if (
-        value_before is None
-        or value_after is None
+        not finite_number(value_before)
+        or not finite_number(value_after)
     ):
         return None
 
@@ -108,8 +158,8 @@ def magnitude_difference(
     value_after,
 ):
     if (
-        value_before is None
-        or value_after is None
+        not finite_number(value_before)
+        or not finite_number(value_after)
     ):
         return None
 
@@ -122,7 +172,7 @@ def magnitude_difference(
 def direction_from_change(
     change,
 ):
-    if change is None:
+    if not finite_number(change):
         return None
 
     if change > 0:
@@ -164,17 +214,21 @@ def describe_transition(
             ),
         }
     
-    support_0 = frame_0[
-        "support"
-    ][
-        "valid_cell_refs"
-    ]
+    support_0 = canonical_support_refs(
+        frame_0[
+            "support"
+        ][
+            "valid_cell_refs"
+        ]
+    )
 
-    support_1 = frame_1[
-        "support"
-    ][
-        "valid_cell_refs"
-    ]
+    support_1 = canonical_support_refs(
+        frame_1[
+            "support"
+        ][
+            "valid_cell_refs"
+        ]
+    )
 
     if support_0 != support_1:
         return {
@@ -655,10 +709,12 @@ def main():
             "physical episode, or Delta."
         ),
         "comparison_rule": (
-            "compare descriptor frames with "
+              "compare descriptor frames with "
             "relative_measurement_index 0 "
             "and 1 only when their valid "
-            "spatial support is identical"
+            "spatial support sets are identical; "
+            "support reference order is ignored "
+            "and duplicate references are rejected"
         ),
         "group_count": len(
             groups
