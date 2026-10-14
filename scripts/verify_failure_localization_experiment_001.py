@@ -696,16 +696,16 @@ def write_json_atomic(path, payload):
 
 
 def main():
+    RECEIPT.unlink(
+        missing_ok=True
+    )
+
     if not LOCALIZATION.exists():
         raise SystemExit(
             f"Missing localization artifact: "
             f"{LOCALIZATION}"
         )
     
-    RECEIPT.unlink(
-        missing_ok=True
-    )
-
     checksum_count, verified_files = (
         verify_checksums()
     )
